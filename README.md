@@ -20,9 +20,7 @@ The current code supports the following classes of problem instances.
 
 ### 1. Random QCQPs
 
-Random convex quadratically constrained quadratic programming instances are tested. These problems are special cases of convex nonlinear conic programs and lead to convex-concave saddle point formulations with non-bilinear coupling terms.
-
-The experiments include merely convex cases
+Random convex quadratically constrained quadratic programming instances are tested. These problems are special cases of convex nonlinear conic programs and lead to convex-concave saddle point formulations with non-bilinear coupling terms. The experiments include merely convex cases.
 
 ### 2. Kernel Matrix Learning
 
