@@ -1,14 +1,10 @@
 # Restarted APDB for Convex Nonlinear Conic Programs
 
-This repository provides MATLAB and Python implementations of (adaptively) restarted variants of the Accelerated Primal-Dual algorithm with Backtracking (APDB) for convex-concave saddle point problems with general couplings.
+This repository provides Python implementations of (adaptively) restarted variants of the Accelerated Primal-Dual algorithm with Backtracking (APDB) for convex-concave saddle point problems with general couplings.
 
 The code is designed for convex-concave minimax reformulations of convex nonlinear conic programs, with convex quadratically constrained quadratic programs (QCQPs) as an important special case.
 
-The implementation is based on the APDB method proposed in
-
-> E. Y. Hamedani and N. S. Aybat,  
-> *A Primal-Dual Algorithm with Line Search for General Convex-Concave Saddle Point Problems*,  
-> SIAM Journal on Optimization, 31(2), 1299--1329, 2021.
+The implementation is based on the APDB method proposed in Aybat, Necdet Serhat, and Jinxin Wang. "Restarted Accelerated Primal-Dual Algorithms with Adaptive Stepsizes for Nonlinear Conic Constrained Convex Optimization." arXiv:2605.29291 (2026).
 
 This code implements restarted APDB methods using both monotone and non-monotone step-size search strategies. The restarted schemes include fixed-frequency restart and adaptive restart variants.
 
@@ -26,21 +22,11 @@ The current code supports the following classes of problem instances.
 
 Random convex quadratically constrained quadratic programming instances are tested. These problems are special cases of convex nonlinear conic programs and lead to convex-concave saddle point formulations with non-bilinear coupling terms.
 
-The experiments include merely convex cases with
-
-\[
-\mu = 0.
-\]
+The experiments include merely convex cases
 
 ### 2. Kernel Matrix Learning
 
 Kernel matrix learning instances are also included. These problems provide strongly convex test cases for the restarted APDB methods.
-
-In the current experiments, these instances correspond to
-
-\[
-\mu = 2.
-\]
 
 ## Main Features
 
