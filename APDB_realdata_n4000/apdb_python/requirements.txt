@@ -1,0 +1,8 @@
+numpy
+scipy
+pandas
+matplotlib
+cvxpy
+mosek
+torch
+pytest

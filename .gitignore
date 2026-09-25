@@ -1,0 +1,12 @@
+.DS_Store
+.AU.*.nosync/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.lic
+*.asv
+outputs*/
+tmp/
+results_*.mat
+results_*.csv
+matlab_plotting_from_script.png

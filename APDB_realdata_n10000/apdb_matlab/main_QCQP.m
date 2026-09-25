@@ -1,0 +1,293 @@
+% In this example, APDB algorithm is specified to solve Quadratic Constrained
+% Quadratic Programming (QCQP)
+%
+% See section 5.2 of the paper https://arxiv.org/pdf/1803.01401.pdf
+% for more details.
+%************************************************************
+% min_{x} 0.5*x'*A*x+b'*x
+% s.t.    0.5*x'*Q_i*x+d_i'*x-c_i<=0, for i=1:n,
+%         -10<=x<=10
+%************************************************************
+clear;
+clc;
+seed = 123;
+rng(seed,'twister');
+
+numsim = 1;
+n = 1e1; % number of constraints
+m = 90; % number of primal variables
+x0 = rand(m,1);
+y0 = zeros(n,1);
+
+Total_time_Mosek = 0;
+%% generating random QCQPs
+for sim=1:numsim
+    S = orth(randn(m,m));
+    D = (rand(m-1,1)*100);
+    % controlling strong convexity and Lip constants
+    A = S'*diag([D;1e-10])*S; % for merely convex scenario
+    A = (A + A')/2;
+    %A = S'*diag([D;1])*S; % uncomment for strongly convex scenario
+    b = randn(m,1);
+    sc = min(eig(A));
+    if sc<1e-8
+        sc = 0;
+    end
+    d = randn(n,m);
+    Q = cell(n,1);
+    for j=1:n
+        S = orth(randn(m,m));
+        D = (rand(m-1,1)*100);
+        Q_tmp = S'*diag([D;1e-10])*S;
+        Q{j,1} = (Q_tmp + Q_tmp')/2;
+    end
+    c = rand(n,1);
+    %------------- CVX ------------------%
+    disp('starting cvx...');
+    tic;
+    cvx_begin quiet
+    cvx_precision high
+    variable xstar(m,1)
+    dual variable ystar{n}
+    constraint = cvx(zeros(n,1));
+    for l=1:n
+        constraint(l) = 0.5*xstar'*Q{l,:}*xstar+d(l,:)*xstar-c(l);
+    end
+    minimize(0.5*xstar'*A*xstar+b'*xstar);
+    subject to
+    for l=1:n
+        constraint(l) <= 0 : ystar{l};
+    end
+    xstar <= 10*ones(m,1);
+    xstar >= -10*ones(m,1);
+    cvx_end
+    mosek_time(sim,1) = toc;
+    Total_time_Mosek = Total_time_Mosek + mosek_time(sim,1);
+    optval = cvx_optval;
+    %---------------------------------------------%
+    input = {A;Q;b;d;c;sc};
+    %----------- simulations ---------------------%
+    max_iter = 5e4;
+    epsilon = 1e-8;
+
+    % %% SDPT3: interior point method
+    % opts_sdpt3.box_lb = -10;
+    % opts_sdpt3.box_ub = 10;
+    % opts_sdpt3.eig_tol = 1e-10;
+    % opts_sdpt3.gaptol = 1e-8;
+    % opts_sdpt3.inftol = 1e-8;
+    % opts_sdpt3.steptol = 1e-8;
+    % opts_sdpt3.printlevel = 1;
+    %
+    % [rel_infeas_sdpt3, rel_subopt_sdpt3, time_sdpt3, iter_sdpt3, oracle_sdpt3, x_sdpt3, info_sdpt3, runhist_sdpt3] = ...
+    %     SDPT3_direct(input, optval, xstar, epsilon, 100, opts_sdpt3);
+
+    %% EGM with tau (stepsizes) tuning
+    opts_egm.epoch = 1; opts_egm.verbose = 300;
+
+    % tuning grid
+    opts_egm.tau_grid = [1e-6 5e-6 1e-5 5e-5 1e-4 5e-4 1e-3];
+
+    % short run for tuning
+    opts_egm.tune_iter = 2000;
+
+    [best_tau_egm{1,sim}, best_out_egm, tune_table_egm{1,sim}] = ...
+        EGM_tune_tau(input,optval,x0,y0,epsilon,max_iter,opts_egm);
+
+    rel_infeas_err_egm{1,sim} = best_out_egm.rel_infeas_err;
+    rel_subopt_egm{1,sim} = best_out_egm.rel_subopt_err;
+    time_period_egm{1,sim} = best_out_egm.time_period;
+    iter_epoch_egm{1,sim} = best_out_egm.iter_epoch;
+    oracle_egm{1,sim} = best_out_egm.oracle;
+
+    fprintf('Final selected EGM tau = %.2e\n', best_tau_egm{1,sim});
+
+    % the input 0/1 indicates whether to use non-monotone stepsizes
+    % [rel_infeas{1,sim},rel_subopt{1,sim},time_period{1,sim}...
+    %     ,iter_epoch{1,sim},oracle{1,sim}]=APDB_c(input,optval,x0,y0,epsilon,max_iter,0);
+
+    % [rel_infeas_r{1,sim},rel_subopt_r{1,sim},time_period_r{1,sim}...
+    %    ,iter_epoch_r{1,sim},oracle_r{1,sim}]=APDB_c_lr_restart(input,optval,x0,y0,epsilon,max_iter,0,K);
+    % APDB
+    % APDB: test both monotone/nonmonotone line search
+    nonmono_list = [0, 1];   % 0: monotone, 1: nonmonotone
+
+    for mode_idx = 1:length(nonmono_list)
+        whether_nonmono = nonmono_list(mode_idx);
+        if whether_nonmono == 0
+            K = 2000; K1 = 800;
+        else
+            K = 1000; K1 = 500;
+        end
+
+        fprintf('\n==============================\n');
+        fprintf('Running APDB with whether_nonmono = %d\n', whether_nonmono);
+        fprintf('==============================\n');
+
+        [rel_infeas_1{mode_idx,sim}, rel_subopt_1{mode_idx,sim}, time_period_1{mode_idx,sim}, ...
+            iter_epoch_1{mode_idx,sim}, oracle_1{mode_idx,sim}] = ...
+            APDB_c_lr(input,optval,x0,y0,epsilon,max_iter,whether_nonmono);
+
+        [rel_infeas_1_ada{mode_idx,sim}, rel_subopt_1_ada{mode_idx,sim}, time_period_1_ada{mode_idx,sim}, ...
+            iter_epoch_1_ada{mode_idx,sim}, oracle_1_ada{mode_idx,sim}] = ...
+            APDB_c_lr_ada_restart(input,optval,x0,y0,epsilon,max_iter,whether_nonmono);
+
+        [rel_infeas_r1{mode_idx,sim}, rel_subopt_r1{mode_idx,sim}, time_period_r1{mode_idx,sim}, ...
+            iter_epoch_r1{mode_idx,sim}, oracle_r1{mode_idx,sim}] = ...
+            APDB_c_lr_restart(input,optval,x0,y0,epsilon,max_iter,whether_nonmono,K1);
+
+        [rel_infeas_xy_1{mode_idx,sim}, rel_subopt_xy_1{mode_idx,sim}, time_period_xy_1{mode_idx,sim}, ...
+            iter_epoch_xy_1{mode_idx,sim}, oracle_xy_1{mode_idx,sim}] = ...
+            APDB_c_xy(input,optval,x0,y0,epsilon,max_iter,whether_nonmono);
+
+        [rel_infeas_xy_r1{mode_idx,sim}, rel_subopt_xy_r1{mode_idx,sim}, time_period_xy_r1{mode_idx,sim}, ...
+            iter_epoch_xy_r1{mode_idx,sim}, oracle_xy_r1{mode_idx,sim}] = ...
+            APDB_c_xy_restart(input,optval,x0,y0,epsilon,max_iter,whether_nonmono,K);
+
+        [rel_infeas_xy_ada1{mode_idx,sim}, rel_subopt_xy_ada1{mode_idx,sim}, time_period_xy_ada1{mode_idx,sim}, ...
+            iter_epoch_xy_ada1{mode_idx,sim}, oracle_xy_ada1{mode_idx,sim}] = ...
+            APDB_c_xy_ada_restart(input,optval,x0,y0,epsilon,max_iter,whether_nonmono);
+    end
+
+end
+save('results_apdb_both_modes.mat', ...
+    'mosek_time', 'Total_time_Mosek', ...
+    'rel_infeas_err_egm','rel_subopt_egm','time_period_egm','iter_epoch_egm','oracle_egm', ...
+    'rel_infeas_1','rel_subopt_1','time_period_1','iter_epoch_1','oracle_1', ...
+    'rel_infeas_1_ada','rel_subopt_1_ada','time_period_1_ada','iter_epoch_1_ada','oracle_1_ada', ...
+    'rel_infeas_r1','rel_subopt_r1','time_period_r1','iter_epoch_r1','oracle_r1', ...
+    'rel_infeas_xy_1','rel_subopt_xy_1','time_period_xy_1','iter_epoch_xy_1','oracle_xy_1', ...
+    'rel_infeas_xy_r1','rel_subopt_xy_r1','time_period_xy_r1','iter_epoch_xy_r1','oracle_xy_r1', ...
+    'rel_infeas_xy_ada1','rel_subopt_xy_ada1','time_period_xy_ada1','iter_epoch_xy_ada1','oracle_xy_ada1');
+
+% Plotting the average of simulations
+% Plotting;
+clear; load('results_apdb_both_modes.mat');
+numsim = numel(oracle_egm);
+%% ========== Summary table: average over simulations ==========
+rows = {};
+
+final_mean = @(C) mean(cellfun(@(x) x(end), C));
+
+% ---------- Reference solver: MOSEK/CVX ----------
+rows = [rows;
+    {"Reference", "MOSEK/CVX", ...
+    mean(mosek_time(1:numsim)), ...
+    NaN, ...
+    0, ...
+    0}
+    ];
+
+% ---------- EGM ----------
+rows = [rows;
+    {"EGM", "EGM", ...
+    final_mean(time_period_egm(1,1:numsim)), ...
+    final_mean(iter_epoch_egm(1,1:numsim)), ...
+    final_mean(rel_subopt_egm(1,1:numsim)), ...
+    final_mean(rel_infeas_err_egm(1,1:numsim))}
+    ];
+
+% ---------- Monotone ----------
+mode_idx = 1;
+
+rows = [rows;
+    {"Monotone", "APDB-yx", ...
+    final_mean(time_period_1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_1(mode_idx,1:numsim))};
+
+    {"Monotone", "rAPDB-yx-ada", ...
+    final_mean(time_period_1_ada(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_1_ada(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_1_ada(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_1_ada(mode_idx,1:numsim))};
+
+    {"Monotone", "rAPDB-yx", ...
+    final_mean(time_period_r1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_r1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_r1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_r1(mode_idx,1:numsim))};
+
+    {"Monotone", "APDB-xy", ...
+    final_mean(time_period_xy_1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_xy_1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_xy_1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_xy_1(mode_idx,1:numsim))};
+
+    {"Monotone", "rAPDB-xy-ada", ...
+    final_mean(time_period_xy_ada1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_xy_ada1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_xy_ada1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_xy_ada1(mode_idx,1:numsim))};
+
+    {"Monotone", "rAPDB-xy", ...
+    final_mean(time_period_xy_r1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_xy_r1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_xy_r1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_xy_r1(mode_idx,1:numsim))}
+    ];
+
+% ---------- Nonmonotone ----------
+mode_idx = 2;
+
+rows = [rows;
+    {"Nonmonotone", "APDB-yx", ...
+    final_mean(time_period_1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_1(mode_idx,1:numsim))};
+
+    {"Nonmonotone", "rAPDB-yx-ada", ...
+    final_mean(time_period_1_ada(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_1_ada(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_1_ada(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_1_ada(mode_idx,1:numsim))};
+
+    {"Nonmonotone", "rAPDB-yx", ...
+    final_mean(time_period_r1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_r1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_r1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_r1(mode_idx,1:numsim))};
+
+    {"Nonmonotone", "APDB-xy", ...
+    final_mean(time_period_xy_1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_xy_1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_xy_1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_xy_1(mode_idx,1:numsim))};
+
+    {"Nonmonotone", "rAPDB-xy-ada", ...
+    final_mean(time_period_xy_ada1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_xy_ada1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_xy_ada1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_xy_ada1(mode_idx,1:numsim))};
+
+    {"Nonmonotone", "rAPDB-xy", ...
+    final_mean(time_period_xy_r1(mode_idx,1:numsim)), ...
+    final_mean(iter_epoch_xy_r1(mode_idx,1:numsim)), ...
+    final_mean(rel_subopt_xy_r1(mode_idx,1:numsim)), ...
+    final_mean(rel_infeas_xy_r1(mode_idx,1:numsim))}
+    ];
+
+ResultTable = cell2table(rows, ...
+    'VariableNames', {'Group','Algorithm','Time','Iter','SuboptRes','InfeasRes'});
+
+disp(' ');
+disp('================ Average over simulations ================');
+
+fprintf('\n%-14s %-18s %-12s %-12s %-18s %-18s\n', ...
+    'Group','Algorithm','Time','Iter','SuboptRes','InfeasRes');
+fprintf('%s\n', repmat('-',1,105));
+
+for i = 1:height(ResultTable)
+    fprintf('%-14s %-18s %-12.2e %-12.2e %-18.2e %-18.2e\n', ...
+        ResultTable.Group{i}, ...
+        ResultTable.Algorithm{i}, ...
+        ResultTable.Time(i), ...
+        ResultTable.Iter(i), ...
+        ResultTable.SuboptRes(i), ...
+        ResultTable.InfeasRes(i));
+end
+
+writetable(ResultTable, 'results_summary_table.csv');
+save('results_summary_table.mat', 'ResultTable');
